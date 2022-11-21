@@ -1,0 +1,10 @@
+site_name: CloudSpeak
+theme: material
+plugins:
+    - search
+    - macros
+repo_url: https://github.com/mlhost/cloudspeak
+extra:
+    version: 0.0.1
+    project_name: cloudspeak
+    project_name_lowercase: cloudspeak
