@@ -10,12 +10,21 @@ from cloudspeak.api.interface.service import Service as Service
 
 class AzureService(Service):
 
-    def __init__(self, connection_string, operations_pool=16, serializer=None):
+    def __init__(self, connection_string, operations_pool=16, serializer=None, context=None):
         self._serializer = serializer
+        self._context = context
         self._blob_service = BlobServiceClient.from_connection_string(connection_string)
         self._leases_handler = LeasesHandler()
         self._progresses = ProgressMultiple(self)
         self._operations_pool = ThreadPoolExecutor(operations_pool)
+
+    @property
+    def context(self):
+        return self._context
+
+    @context.setter
+    def context(self, new_context):
+        self._context = new_context
 
     @property
     def serializer(self):
@@ -52,7 +61,7 @@ class AzureService(Service):
         if type(element) is int:
             result = self.list()[element]
         elif type(element) is str:
-            result = AzureContainer(self, element)
+            result = AzureContainer(self, element, context=self.context)
         else:
             raise KeyError("Type of container not understood. Try an index or the name of the container (as a string).")
 

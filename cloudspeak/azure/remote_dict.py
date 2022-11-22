@@ -1,8 +1,9 @@
-from azure.core.exceptions import ResourceModifiedError, ResourceNotFoundError
+from azure.core.exceptions import ResourceModifiedError, ResourceNotFoundError, HttpResponseError
 from azure.storage.blob import PartialBatchErrorException
 
 from cloudspeak.api.azure import AzureService
 from cloudspeak.serializers import JoblibSerializer
+from cloudspeak.utils.basics import removeprefix
 
 
 class AzureDictionary:
@@ -24,6 +25,14 @@ class AzureDictionary:
         :param folder_name:
             Name of the folder to use as storage.
 
+        :param indexed:
+            True to store an index along with the storage.
+            The index allows to retrieve how many elements are stored faster than not having indexes, but each write or
+            delete operation must synchronize the index, which might add delays to the process.
+
+            Disabling the index speed is gained in I/O operations, but knowing the number of elements or iterating over
+            them gets more complexity.
+
         :param serializer:
             Serializer to use as backend storage.
             Allowed serializers can be seen in package `cloudsimple.serializers`.
@@ -31,8 +40,6 @@ class AzureDictionary:
 
         :param create_container:
             Creates the container in case it doesn't exit. NOTE: Adds delay since it must query backend.
-
-        :param indexed:
 
         """
         service = AzureService(connection_string=connection_string, serializer=serializer)
@@ -56,6 +63,10 @@ class AzureDictionary:
         Retrieves the full blob storage URL of the given item name.
         """
         return f"{self._folder_name}{item_name}"
+
+    @property
+    def context(self):
+        return id(self)
 
     @property
     def indexed(self):
@@ -106,9 +117,11 @@ class AzureDictionary:
 
         # We try to upload the new index.
         try:
-            index_file.lock(duration_seconds=60, context=id(self))
+            index_file.lock(duration_seconds=60,
+                            context=self.context)
             index_file.data = new_content
-            index_file.upload(overwrite=True, allow_changed=False)
+            index_file.upload(overwrite=True,
+                              allow_changed=False)
 
         except ResourceModifiedError as e:
             # If the content has changed we need to merge changes.
@@ -145,9 +158,9 @@ class AzureDictionary:
             index_file.upload(overwrite=True, allow_changed=True)
 
         finally:
-            index_file.unlock(context=id(self))
+            index_file.unlock(context=self.context)
 
-    def lock(self, key, duration_seconds=30, wait_seconds=-1, poll_interval_seconds=0.5, context=None):
+    def lock(self, key, duration_seconds=30, wait_seconds=-1, poll_interval_seconds=0.5):
         """
         Locks the given key for the specified seconds in a given context.
 
@@ -165,24 +178,10 @@ class AzureDictionary:
         :param poll_interval_seconds:
             Query interval for the key lock release status.
 
-        :param context:
-            String identifying the context of this lock in the current computer Process.
-            All operations are allowed under this context as lease is visible.
-            Note that this doesn't apply on external processes or machines. Available contexts:
-                - "instance"  -> Lock at instance level. Other file instances can't get lease of this lock in the
-                                 app.
-                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
-                - custom      -> Lock at a custom level. This can be any string.
-
-            By default it is locked under the context of ID of this RemoteDict object.
-            This means that only this remote dict object can write/delete/unlock the locked object.
-
         :returns:
             True if locked successfully. False otherwise.
         """
-        if context is None:
-            context = str(id(self))
-
+        context = self.context
         item = self.get_url(key)
         container = self.container
 
@@ -190,30 +189,17 @@ class AzureDictionary:
                                     wait_seconds=wait_seconds,
                                     poll_interval_seconds=poll_interval_seconds,
                                     context=context,
-                                    ignore_changes=True)
+                                    changed_ok=True)
 
-    def unlock(self, key, context=None):
+    def unlock(self, key):
         """
         Unlocks the given key under the specified context.
 
         :param key:
             Name of the key to unlock (if locked).
 
-        :param context:
-            String identifying the context of this unlock in the current computer Process.
-            All operations are allowed under this context as lease is visible.
-            Note that this doesn't apply on external processes or machines. Available contexts:
-                - "instance"  -> Lock at instance level. Other file instances can't get lease of this lock in the
-                                 app.
-                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
-                - custom      -> Lock at a custom level. This can be any string.
-
-            By default it is locked under the context of ID of this RemoteDict object.
-            This means that only this remote dict object can write/delete/unlock the locked object.
         """
-        if context is None:
-            context = str(id(self))
-
+        context = self.context
         item = self.get_url(key)
         container = self.container
 
@@ -259,7 +245,7 @@ class AzureDictionary:
         key_name = None
         try:
             for p in progresses:
-                key_name = p.file.name.lstrip(self._folder_name)
+                key_name = removeprefix(p.file.name, self._folder_name)
                 p.join(tqdm_bar=False)
 
         except ResourceNotFoundError:
@@ -318,6 +304,8 @@ class AzureDictionary:
             tracking the upload operations (speeds, times, sizes, ...).
         """
         container = self._container
+        context = self.context
+
         is_list = isinstance(key, list)
 
         if not is_list:
@@ -330,7 +318,9 @@ class AzureDictionary:
             # We add the folder prefix to each
             file = container[self.get_url(k)]
             file.data = v
-            progress = file.upload(overwrite=True, allow_changed=True)
+            progress = file.upload(overwrite=True,
+                                   allow_changed=True,
+                                   context=context)
             progresses.append(progress)
 
         result = progresses if is_list else progresses[0]
@@ -352,14 +342,37 @@ class AzureDictionary:
 
         progresses = self.async_set(key, value, write_index=False)
 
-        for p in progresses:
-            p.join(tqdm_bar=False)
+        write_failed = []
+        write_failed_reasons = []
+
+        for p, k in zip(progresses, key):
+            try:
+                p.join(tqdm_bar=False)
+            except HttpResponseError as e:
+                write_failed.append(k)
+                write_failed_reasons.append(e.reason)
 
         if self.indexed:
             idx_content = self.index
-            new_content = [x for x in idx_content if x not in key]
+            exclude_keys = set(key).union(write_failed)
+            new_content = [x for x in idx_content if x not in exclude_keys]
             new_content.extend(key)
             self.index = new_content
+
+        if write_failed:
+            if is_list:
+                error = KeyError(f"There were {len(write_failed)} out of {len(key)} keys that couldn't be written."
+                                 f"Access the .keys attribute of this exception to know which keys could not be written "
+                                 f"and the reason.")
+
+                error.keys = list(zip(write_failed, write_failed_reasons))
+            else:
+
+                reason = write_failed_reasons[0]
+                error = KeyError(f"The key {write_failed[0]} could not be written. Reason: {reason}.")
+                error.keys = [(write_failed[0], reason)]
+
+            raise error
 
     def __len__(self):
         """
@@ -373,9 +386,11 @@ class AzureDictionary:
         index = self.index
 
         if index is None:
+            folder_name = self._folder_name
+
             # We iterate over the blobs
-            for f in self._container.get_files(self._folder_name, delimiter="/"):
-                name = f.name.lstrip(self._folder_name)
+            for f in self._container.get_files(folder_name, delimiter="/"):
+                name = removeprefix(f.name, folder_name)
 
                 # Index name is excluded
                 if name == self.INDEX_NAME:
@@ -442,6 +457,7 @@ class AzureDictionary:
         """
         is_list = isinstance(key, list)
 
+        context = self.context
         container = self.container
         folder_name = self._folder_name
 
@@ -459,13 +475,13 @@ class AzureDictionary:
         exception = None
 
         try:
-            container.delete_many_files(files, changed_ok=True, raise_errors=True)
+            container.delete_many_files(files, changed_ok=True, raise_errors=True, context=context)
             keys_removed = set(key)
 
         except PartialBatchErrorException as e:
             files_not_removed, files_reasons = zip(*e.parts)
 
-            keys_not_removed = [x.name.lstrip(folder_name) for x in files_not_removed]
+            keys_not_removed = [removeprefix(x.name, folder_name) for x in files_not_removed]
             keys_not_removed_reasons = [f.reason for f in files_reasons]
 
             keys_removed = set(key).difference(keys_not_removed)
@@ -477,16 +493,16 @@ class AzureDictionary:
             self.index = index_content
 
         if exception is not None:
-            if not is_list:
-                reason = exception.parts[0][1].reason
-                error = KeyError(f"The key {key[0]} could not be removed. Reason: {reason}.")
-                error.keys = [(key[0], reason)]
-
-            else:
+            if is_list:
                 error = KeyError(f"Only {len(keys_removed)} out of {len(key)} could be removed. "
                                  f"Access the .keys attribute of this exception to know which keys could not be removed and "
                                  f"the reason.")
                 error.keys = list(zip(keys_not_removed, keys_not_removed_reasons))
+
+            else:
+                reason = exception.parts[0][1].reason
+                error = KeyError(f"The key {key[0]} could not be removed. Reason: {reason}.")
+                error.keys = [(key[0], reason)]
 
             raise error
 

@@ -16,7 +16,36 @@ from cloudspeak.utils.time import to_datetime
 
 class AzureFile(File):
     def __init__(self, container, name, snapshot_id=None,
-                 max_concurrency_download=None, max_concurrency_upload=None):
+                 max_concurrency_download=None, max_concurrency_upload=None,
+                 context=None):
+        """
+        Instances a new Azure File.
+
+        :param container:
+            Container object owner of this File instance.
+
+        :param name:
+            Name of the file (blob name).
+
+        :param snapshot_id:
+            ID of the snapshot that represents this file.
+
+        :param max_concurrency_download:
+            Maximum number of paralell downloads that will be used per blob.
+            If not set, retrieved from config parameter 'blob.max_concurrency_download'.
+
+        :param max_concurrency_upload:
+            Maximum number of paralell uploads that will be used per blob.
+            If not set, retrieved from config parameter 'blob.max_concurrency_upload'.
+
+        :param context:
+            The context level of the lock. Possible contexts:
+                - "instance"  -> Lock at instance level. Other instances can't get lease of this lock in the app.
+                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
+                - custom      -> Lock at a custom level. This can be any string.
+
+            If not set, will be inherited from the container.
+        """
         super().__init__(container)
 
         self._name = name
@@ -33,19 +62,30 @@ class AzureFile(File):
         self._max_concurrency_download = max_concurrency_download
         self._max_concurrency_upload = max_concurrency_upload
 
+        self._context = context if context is not None else container.context
+
         container_raw = container.container_raw
         self._client = container_raw.get_blob_client(name, snapshot=snapshot_id)
+
+    @property
+    def context(self):
+        return self._context
+
+    @context.setter
+    def context(self, new_context):
+        self._context = new_context
 
     @property
     def leases(self):
         return self.container.leases
 
-    @property
-    def lease(self):
+    def get_current_lease(self, context=None):
         """
-        Retrieves the lease for the current blob if any active known by this process.
+        Retrieves the lease for the current blob if any active and known by this process.
         """
-        return self.leases.get_lease(self.id)
+        context = context if context is not None else self._context
+        lock_id = self._get_lock_id(context)
+        return self.leases.get_lease(lock_id)
 
     @property
     def max_concurrency_download(self):
@@ -73,7 +113,9 @@ class AzureFile(File):
         """
         return self._client
 
-    def _upload(self, progress, overwrite=False, allow_changed=False, tags=None):
+    def _upload(self, progress, overwrite=False, allow_changed=False, tags=None, context=None):
+        context = context if context is not None else self._context
+
         if tags is None:
             tags = {}
 
@@ -89,10 +131,10 @@ class AzureFile(File):
             kwargs['etag'] = self._etag
             kwargs['match_condition'] = MatchConditions.IfNotModified
 
-        lease = self.lease
+        lease = self.get_current_lease(context=context)
 
         if lease is not None:
-            kwargs['lease_id'] = lease
+            kwargs['lease'] = lease
 
         try:
             if not overwrite and self.exists:
@@ -177,7 +219,7 @@ class AzureFile(File):
             total_progress = len(self._data) if self._data is not None else 0
             progress.tick_update(total_progress, total_progress)
 
-    def upload(self, overwrite=False, allow_changed=False, tags=None):
+    def upload(self, overwrite=False, allow_changed=False, tags=None, context=None):
         """
         Uploads the internal `data` to the blob storage.
         This is an async method.
@@ -200,6 +242,8 @@ class AzureFile(File):
         :returns:
             A Progress object that can be used to track the operation progress.
         """
+        context = context if context is not None else self._context
+
         if self._data is None:
             raise ValueError("No data to upload. Either download current version or set new data as binary.")
 
@@ -213,7 +257,8 @@ class AzureFile(File):
             promise = self.service.pool.submit(self._upload,
                                                progress=progress,
                                                overwrite=overwrite,
-                                               allow_changed=allow_changed)
+                                               allow_changed=allow_changed,
+                                               context=context)
             progress.set_promise(promise)
 
             self._progresses[f"upload_{self._etag}"] = progress
@@ -262,18 +307,34 @@ class AzureFile(File):
 
     @property
     def url(self):
+        """
+        URL Representation of the blob in the backend Azure Blob Storage.
+        """
         return self._client.url
 
     @property
     def name(self):
+        """
+        Name of the blob in the blob storage.
+        """
         return self._name
 
     @property
     def id(self):
+        """
+        Unique ID file-wide.
+
+        Every instance have a different id, even though they are all pointing to the same URL (and snapshot).
+        """
         return f"{id(self)}@{self.url}:{self.snapshot_id}"
 
     @property
     def app_id(self):
+        """
+        Unique ID application-wide.
+
+        All the instances pointing to the same URL (and snapshot) have the same app ID.
+        """
         return f"{self.url}:{self.snapshot_id}"
 
     @property
@@ -303,19 +364,28 @@ class AzureFile(File):
 
         If the file already exists, nothing is done.
         """
-        if self.exists:
-            return
-
         try:
-            self._client.upload_blob(self._data)
+            self._data = b"" if self._data is None else self._data
+            self.upload(overwrite=True).join(tqdm_bar=False)
 
         except ResourceExistsError:
             pass
 
-        self._etag = self.metadata.get("etag")
+    def _get_lock_id(self, context):
+        """
+        Retrieves the lock ID (for handling leases).
+        """
+        if context == "instance":
+            lock_id = self.id
+        elif context == "app":
+            lock_id = self.app_id
+        else:
+            lock_id = f"{context}_{self.app_id}"
 
-    def lock(self, duration_seconds=-1, wait_seconds=-1, poll_interval_seconds=0.5, ignore_changes=False,
-             context="instance"):
+        return lock_id
+
+    def lock(self, duration_seconds=-1, wait_seconds=-1, poll_interval_seconds=0.5, changed_ok=False,
+             context=None):
         """
         Locks the file in the backend for the specified amount of time.
 
@@ -333,7 +403,7 @@ class AzureFile(File):
         :param poll_interval_seconds:
             poll frequency for unlock query.
 
-        :param ignore_changes:
+        :param changed_ok:
             True to lock the resource even if it was changed in the backend (will lock always).
             False to raise an exception in case it was changed in the backend (won't lock sometimes).
 
@@ -343,27 +413,18 @@ class AzureFile(File):
                 - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
                 - custom      -> Lock at a custom level. This can be any string.
 
+            If not set, will be used the original File context (inherited from the container).
+
         :return:
             True if locked by this process. False otherwise.
         """
-
-        # The file must exist in the backend. This method deals with it for us.
-        if not self.exists:
-            self.create()
-
         start = time.time()
 
-        if context == "instance":
-            lock_id = self.id
-        elif context == "app":
-            lock_id = self.app_id
-        else:
-            lock_id = f"{context}_{self.app_id}"
-
+        lock_id = self._get_lock_id(context)
         lease = self.leases.get_lease(lock_id)
 
         if lease is not None:
-            self.leases.update_lease(self.id, lease_expire_seconds=duration_seconds)
+            self.leases.update_lease(lock_id, lease_expire_seconds=duration_seconds)
             return True
 
         # The complex code of trying to acquire a lease... until we do
@@ -371,7 +432,7 @@ class AzureFile(File):
 
             kwargs = {}
 
-            if self._etag is not None:
+            if not changed_ok and self._etag is not None:
                 kwargs['etag'] = self._etag
                 kwargs['match_condition'] = MatchConditions.IfModified
 
@@ -384,11 +445,9 @@ class AzureFile(File):
                 # TODO: Exponential wait perhaps?
                 time.sleep(poll_interval_seconds)
 
-            except ResourceModifiedError as e:
-                # What happens if file was changed in the blob storage and we don't have the
-                # latest version when trying to lock it? we probably raise an exception to let the user know.
-                if not ignore_changes:
-                    raise e from None
+            except ResourceNotFoundError:
+                # Resource not found? we must create it and retry again.
+                self.create()
 
         if lease is None:
             raise TimeoutError("Could not retrieve a lock in time")
@@ -400,7 +459,7 @@ class AzureFile(File):
 
         return True
 
-    def unlock(self, context="instance"):
+    def unlock(self, context=None):
         """
         Unlocks this file if was locked.
 
@@ -409,14 +468,10 @@ class AzureFile(File):
                 - "instance"  -> Lock at instance level. Other instances can't get lease of this lock in the app.
                 - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
                 - custom      -> Lock at a custom level. This can be any string.
-        """
-        if context == "instance":
-            lock_id = self.id
-        elif context == "app":
-            lock_id = self.app_id
-        else:
-            lock_id = f"{context}_{self.app_id}"
 
+        If not set, will be used the original File context (inherited from the container).
+        """
+        lock_id = self._get_lock_id(context)
         self.leases.remove_lease(lock_id)
 
     @property
@@ -447,7 +502,7 @@ class AzureFile(File):
         """
         return self.metadata.get("etag") != self._etag or self._assigned
 
-    def delete(self, changed_ok=False):
+    def delete(self, changed_ok=False, context=None):
         """
         Deletes the file from the backend.
         If the blob has snapshots, they will all be removed.
@@ -455,8 +510,17 @@ class AzureFile(File):
         :param changed_ok:
             True to delete the blob even if it changed since last check in the backend.
             False to raise an error in case the file changed since last check in the backend.
+
+        :param context:
+            The context level of the lock. Possible contexts:
+                - "instance"  -> Lock at instance level. Other instances can't get lease of this lock in the app.
+                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
+                - custom      -> Lock at a custom level. This can be any string.
+
+            If not set, will be used the original File context (inherited from the container).
         """
-        lease = self.lease
+        context = context if context is not None else self._context
+        lease = self.get_current_lease(context=context)
 
         kwargs = {}
 
@@ -492,12 +556,21 @@ class AzureFile(File):
         return self.container.get_file(self.name,
                                        snapshot_id=snapshot_id)
 
-    def clear_snapshots(self):
+    def clear_snapshots(self, context=None):
         """
         Removes all the snapshots of this file.
         This is equivalent to `file.snapshots.clear()`
+
+        :param context:
+            The context level of the lock. Possible contexts:
+                - "instance"  -> Lock at instance level. Other instances can't get lease of this lock in the app.
+                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
+                - custom      -> Lock at a custom level. This can be any string.
+
+            If not set, will be used the original File context (inherited from the container).
         """
-        lease = self.leases.get_lease(self.id)
+        context = context if context is not None else self._context
+        lease = self.get_current_lease(context=context)
 
         self._client.delete_blob(delete_snapshots="only",
                                  lease=lease)
@@ -521,8 +594,20 @@ class AzureFile(File):
 
         return content_md5
 
-    def __str__(self):
-        lease = self.leases.get_lease(self.id)
+    def __str__(self, context=None):
+        """
+        Retrieves a string representation of the current file.
+
+        :param context:
+            The context level of the lock. Possible contexts:
+                - "instance"  -> Lock at instance level. Other instances can't get lease of this lock in the app.
+                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
+                - custom      -> Lock at a custom level. This can be any string.
+
+            If not set, will be used the original File context (inherited from the container).
+        """
+        context = context if context is not None else self._context
+        lease = self.get_current_lease(context=context)
 
         try:
             metadata = self.metadata
@@ -551,9 +636,24 @@ class AzureFile(File):
     def __repr__(self):
         return str(self)
 
-    def to_dict(self):
+    def to_dict(self, include_lease=True, context=None):
+        """
+        Retrieves a dict representation of the current file.
+
+        :param include_lease:
+            True to include the lease information. False to exclude leases.
+
+        :param context:
+            The context level of the lock. Possible contexts:
+                - "instance"  -> Lock at instance level. Other instances can't get lease of this lock in the app.
+                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
+                - custom      -> Lock at a custom level. This can be any string.
+
+            If not set, will be used the original File context (inherited from the container).
+        """
+        context = context if context is not None else self._context
+        lease = self.get_current_lease(context=context)
         etag = self._etag
-        lease = self.lease
         snapshot = self.snapshot_id
 
         result = {
@@ -563,7 +663,7 @@ class AzureFile(File):
         if etag is not None:
             result["etag"] = etag
 
-        if lease is not None:
+        if lease is not None and include_lease:
             result['lease_id'] = lease
 
         if self.snapshot_id is not None:
@@ -571,7 +671,7 @@ class AzureFile(File):
 
         return result
 
-    def reset_status(self):
+    def reset_status(self, clear_lease=False):
         """
         Resets the internal status of the file (as new fresh instance).
         """
