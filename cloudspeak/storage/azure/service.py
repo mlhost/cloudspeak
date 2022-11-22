@@ -2,10 +2,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from azure.storage.blob import BlobServiceClient
 
-from cloudspeak.api.azure.container import AzureContainer
-from cloudspeak.api.azure.leases.leases_handler import LeasesHandler
-from cloudspeak.api.azure.progress import ProgressMultiple
-from cloudspeak.api.interface.service import Service as Service
+from cloudspeak.storage.azure.container import AzureContainer
+from cloudspeak.storage.azure.leases.leases_handler import LeasesHandler
+from cloudspeak.storage.azure.progress import ProgressMultiple
+from cloudspeak.storage.interface.service import Service as Service
 
 
 class AzureService(Service):
