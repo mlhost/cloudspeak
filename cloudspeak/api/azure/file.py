@@ -10,6 +10,7 @@ from cloudspeak.api.azure.snapshots import Snapshots
 from cloudspeak.api.interface.file import File
 from cloudspeak.config import get_config
 from cloudspeak.utils.format import size_to_human
+from cloudspeak.utils.basics import len_nan
 from cloudspeak.utils.time import to_datetime
 
 
@@ -25,7 +26,7 @@ class AzureFile(File):
         self._progresses_lock = Lock()
         self._progresses = weakref.WeakValueDictionary()
 
-        self._data = b""
+        self._data = None
         self._etag = None
         self._md5sum = None
 
@@ -125,7 +126,7 @@ class AzureFile(File):
                 total_progress = -1
 
             else:
-                total_progress = len(self._data)
+                total_progress = len_nan(self._data, none_len=0)
 
             progress.tick_update(total_progress, total_progress)
 
@@ -153,8 +154,17 @@ class AzureFile(File):
 
                 self._data = b"".join(chunks)
 
+            except ResourceNotFoundError as e:
+                if self._etag is not None:
+                    # The item was deleted
+                    self.reset_status()
+
+                else:
+                    # Otherwise it is an unknown element.
+                    raise e
+
             finally:
-                total_progress = len(self._data) if self._data is not None else -1
+                total_progress = len_nan(self._data, none_len=-1)
                 progress.tick_update(total_progress, total_progress)
 
             metadata = self.metadata
@@ -164,7 +174,7 @@ class AzureFile(File):
             self._assigned = False
 
         except ResourceModifiedError:
-            total_progress = len(self._data)
+            total_progress = len(self._data) if self._data is not None else 0
             progress.tick_update(total_progress, total_progress)
 
     def upload(self, overwrite=False, allow_changed=False, tags=None):
@@ -457,12 +467,18 @@ class AzureFile(File):
         if self.snapshot_id is None:
             kwargs['delete_snapshots'] = "include"
 
-        self._client.delete_blob(lease=lease,
-                                 **kwargs)
+        try:
+            self._client.delete_blob(lease=lease,
+                                     **kwargs)
+        except ResourceNotFoundError:
+            # No error. The resource already deleted by someone else.
+            pass
+
+        self.reset_status()
 
     @property
     def size(self):
-        return self.metadata.get('size', 0) if not self._assigned else len(self.data)
+        return self.metadata.get('size', 0) if not self._assigned else len_nan(self._data, none_len=0)
 
     @property
     def last_modified(self):
@@ -515,7 +531,7 @@ class AzureFile(File):
 
         virtual = len(metadata) == 0
         modified = metadata.get('etag') != self._etag
-        size = metadata.get('size') if not self._assigned else len(self.data)
+        size = metadata.get('size') if not self._assigned else len_nan(self._data, none_len=0)
         last_modified = to_datetime(metadata.get('last_modified')) if metadata.get('last_modified') is not None else None
 
         encouraged_action = "download" if modified and not self._assigned else "upload"
@@ -527,7 +543,7 @@ class AzureFile(File):
             f"\tOutdated ({encouraged_action} encouraged)\n" if modified else '',
             f"\tSnapshot: {self.snapshot_id})\n" if self.snapshot_id is not None else '',
             f"\tLEASED: {lease})\n" if lease is not None else '',
-            f"\tCACHED: {self.data is not None})"
+            f"\tCACHED: {self._data is not None})"
         ]
 
         return "".join(text_lines)
@@ -554,3 +570,11 @@ class AzureFile(File):
             result['snapshot'] = snapshot
 
         return result
+
+    def reset_status(self):
+        """
+        Resets the internal status of the file (as new fresh instance).
+        """
+        self._etag = None
+        self._md5sum = None
+        self._data = None

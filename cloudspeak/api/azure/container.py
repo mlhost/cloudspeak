@@ -1,5 +1,6 @@
 from azure.core import MatchConditions
 from azure.core.exceptions import ResourceExistsError
+from azure.storage.blob import PartialBatchErrorException
 
 from cloudspeak.api.azure.file import AzureFile
 from cloudspeak.api.interface.container import Container
@@ -207,9 +208,15 @@ class AzureContainer(Container):
 
         return file
 
-    def delete_many_files(self, files_list, changed_ok=False):
+    def delete_many_files(self, files_list, changed_ok=False, raise_errors=True):
         """
         Attempts to remove a list of blobs.
+        In order to know which files were removed and which couldn't be removed, the result should be checked.
+
+        Example:
+            >>> container.delete_many_files([file1, file2], changed_ok=True, raise_errors=False)
+            [<HttpClientTransportResponse: 202 Accepted>,
+             <HttpClientTransportResponse: 404 The specified blob does not exist., Content-Type: application/xml>]
 
         :param files_list:
             List of files to remove from the container.
@@ -217,6 +224,17 @@ class AzureContainer(Container):
         :param changed_ok:
             Boolean flag to determine if an error should be raised in case the blob changed in the backend before
             deleting.
+
+        :param raise_errors:
+            Boolean flag to specify whether an error should be raised in case there was any issue.
+            True to raise error. False otherwise.
+
+            An error won't stop from removing the remaining files.
+
+        :return:
+            List of HttpClientTransportResponse objects.
+            Every object provide information in the attributes `status_code` and `reason`.
+            A `status_code` >= 200 and < 300 indicates success.
         """
 
         blobs = [f.to_dict() for f in files_list]
@@ -238,7 +256,22 @@ class AzureContainer(Container):
         if include_snapshots:
             kwargs['delete_snapshots'] = 'include'
 
-        self._client.delete_blobs(*blobs, **kwargs)
+        # We need to iterate over the results to tell the File objects that they have been effectively removed.
+        operations_report = self._client.delete_blobs(*blobs, **kwargs, raise_on_any_failure=False)
+        results = []
+        errors = []
+
+        for file_status, file in zip(operations_report, files_list):
+            results.append(file_status)
+            if 200 <= file_status.status_code < 300:
+                file.reset_status()
+            else:
+                errors.append((file, file_status))
+
+        if raise_errors and len(errors) > 0:
+            raise PartialBatchErrorException(f"{len(errors)} errors in the backend", None, parts=errors)
+
+        return results
 
     def __str__(self):
         return f"[AzureBlobStorage Container; Name: '{self.name}']"
