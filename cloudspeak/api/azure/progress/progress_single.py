@@ -98,14 +98,14 @@ class ProgressSingle:
     def date_end(self):
         last_time = self._time_end
 
-        if last_time is None:
+        if last_time is None or not self.finished:
             return None
 
         return pd.to_datetime(last_time * 10 ** 9).tz_localize("UTC")
 
     @property
     def _time_end(self):
-        return self._tick_last_time if self._tick_last_time is not None and not self.finished else None
+        return self._tick_last_time  # if self._tick_last_time is not None and not self.finished else None
 
     @property
     def time_spent(self):
