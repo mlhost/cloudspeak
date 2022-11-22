@@ -12,12 +12,38 @@ import time
 
 
 class AzureContainer(Container):
-    def __init__(self, service, container_name):
+    def __init__(self, service, container_name, context=None):
+        """
+        Constructor of the container.
+
+        :param service:
+            Service object that owns this container.
+
+        :param container_name:
+            Name of the container. Must be alphanumeric and lower-case, without special characters.
+
+        :param context:
+            The context level of the lock. Possible contexts:
+                - "instance"  -> Lock at instance level. Other instances can't get lease of this lock in the app.
+                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
+                - custom      -> Lock at a custom level. This can be any string.
+
+            If not set, will be inherited from the service owner.
+        """
         super().__init__(service)
         self._container_name = container_name
         service_raw = service.service_raw
         self._client = service_raw.get_container_client(container_name)
         self._file_weakref_cache = weakref.WeakValueDictionary()
+        self._context = context if context is not None else service.context
+
+    @property
+    def context(self):
+        return self._context
+
+    @context.setter
+    def context(self, new_context):
+        self._context = new_context
 
     @property
     def cached_files(self):
@@ -67,7 +93,7 @@ class AzureContainer(Container):
         container_meta = self._client.get_container_properties()
         return container_meta
 
-    def lock(self, duration_seconds=-1, wait_seconds=-1, poll_interval_seconds=0.5):
+    def lock(self, duration_seconds=-1, wait_seconds=-1, poll_interval_seconds=0.5, context=None):
         """
         Locks the container in the backend for the specified amount of time.
 
@@ -84,6 +110,14 @@ class AzureContainer(Container):
 
         :param poll_interval_seconds:
             poll frequency for unlock query.
+
+        :param context:
+            The context level of the lock. Possible contexts:
+                - "instance"  -> Lock at instance level. Other instances can't get lease of this lock in the app.
+                - "app"       -> Lock at app level. Other instances CAN get lease of this lock in the app.
+                - custom      -> Lock at a custom level. This can be any string.
+
+            If not set, will be used the original File context (inherited from the service).
 
         :return:
             True if locked by this process. False otherwise.
@@ -203,12 +237,12 @@ class AzureContainer(Container):
         file = self._file_weakref_cache.get(name)
 
         if file is None:
-            file = AzureFile(self, name, snapshot_id=snapshot_id)
+            file = AzureFile(self, name, snapshot_id=snapshot_id, context=self.context)
             self._file_weakref_cache[name] = file
 
         return file
 
-    def delete_many_files(self, files_list, changed_ok=False, raise_errors=True):
+    def delete_many_files(self, files_list, changed_ok=False, raise_errors=True, context=None):
         """
         Attempts to remove a list of blobs.
         In order to know which files were removed and which couldn't be removed, the result should be checked.
@@ -231,13 +265,16 @@ class AzureContainer(Container):
 
             An error won't stop from removing the remaining files.
 
+        :param context:
+            The Leases context to retrieve leases for each file.
+
         :return:
             List of HttpClientTransportResponse objects.
             Every object provide information in the attributes `status_code` and `reason`.
             A `status_code` >= 200 and < 300 indicates success.
         """
 
-        blobs = [f.to_dict() for f in files_list]
+        blobs = [f.to_dict(include_lease=True, context=context) for f in files_list]
         include_snapshots = True
 
         # We append the MATCH condition (in case) or remove the etag
@@ -265,6 +302,9 @@ class AzureContainer(Container):
             results.append(file_status)
             if 200 <= file_status.status_code < 300:
                 file.reset_status()
+
+                # If it has an active lease we need to remove it
+                file.unlock(context=context)
             else:
                 errors.append((file, file_status))
 

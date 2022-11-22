@@ -1,9 +1,9 @@
-from threading import Lock, Thread, Event, get_ident
-from azure.core.exceptions import ResourceExistsError
+from threading import Lock, Thread, Event
+
+from azure.core.exceptions import ResourceNotFoundError
 
 from cloudspeak.utils.time import now
 
-import time
 import logging
 
 
@@ -136,12 +136,15 @@ class LeasesHandler:
 
         if lease_data is not None:
             if break_lease:
-                lease_data['lease'].break_lease(0)
+                try:
+                    lease_data['lease'].break_lease(0)
+                except ResourceNotFoundError:
+                    pass
 
             if lease_data['lease_end_callback']:
                 lease_data['lease_end_callback'](lease_data['lease'])
 
-        self._logger.debug(f"Removed lease: {uri}")
+        self._logger.debug(f"Removed lease: {uri} (broken in backend: {break_lease})")
 
     def get_lease(self, uri):
         return self._leases.get(uri, {}).get('lease')

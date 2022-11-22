@@ -177,7 +177,7 @@ class ProgressSingle:
         with self._lock:
             self._links[len(self._links)] = callback
 
-    def join(self, timeout=-1, timeout_raise_exception=True, tqdm_bar=True, callback=None):
+    def join(self, timeout=-1, timeout_raise_exception=True, tqdm_bar=False, callback=None):
         """
         Blocks the thread until completion of the progress.
         This method should be used always to check if there is any kind of error with the process.
@@ -273,5 +273,5 @@ class ProgressSingle:
 
     def _repr_html_(self):
         bar = self._create_bar(force=True)
-        self.join()
+        self.join(tqdm_bar=True)
         return bar.__repr__()
