@@ -300,7 +300,7 @@ cython_debug/
 
 # Custom data
 debug*.py
-/notebooks/*
+debug/*.ipynb
 
 .idea
-/.idea/
+.idea/
