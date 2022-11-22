@@ -1,4 +1,5 @@
 from azure.core.exceptions import ResourceModifiedError, ResourceNotFoundError
+from azure.storage.blob import PartialBatchErrorException
 
 from cloudspeak.api.azure import AzureService
 from cloudspeak.serializers import JoblibSerializer
@@ -442,19 +443,52 @@ class AzureDictionary:
         is_list = isinstance(key, list)
 
         container = self.container
+        folder_name = self._folder_name
 
         if not is_list:
             key = [key]
 
+        if len(key) == 0:
+            return
+
         files = [container[self.get_url(k)] for k in key]
 
-        container.delete_many_files(files, changed_ok=True)
+        keys_not_removed = None
+        keys_not_removed_reasons = None
+
+        exception = None
+
+        try:
+            container.delete_many_files(files, changed_ok=True, raise_errors=True)
+            keys_removed = set(key)
+
+        except PartialBatchErrorException as e:
+            files_not_removed, files_reasons = zip(*e.parts)
+
+            keys_not_removed = [x.name.lstrip(folder_name) for x in files_not_removed]
+            keys_not_removed_reasons = [f.reason for f in files_reasons]
+
+            keys_removed = set(key).difference(keys_not_removed)
+            exception = e
 
         if self.indexed:
             index_content = self.index
-            keys_removed = set(key)
             index_content = [k for k in index_content if k not in keys_removed]
             self.index = index_content
+
+        if exception is not None:
+            if not is_list:
+                reason = exception.parts[0][1].reason
+                error = KeyError(f"The key {key[0]} could not be removed. Reason: {reason}.")
+                error.keys = [(key[0], reason)]
+
+            else:
+                error = KeyError(f"Only {len(keys_removed)} out of {len(key)} could be removed. "
+                                 f"Access the .keys attribute of this exception to know which keys could not be removed and "
+                                 f"the reason.")
+                error.keys = list(zip(keys_not_removed, keys_not_removed_reasons))
+
+            raise error
 
     def clear(self):
         """
@@ -477,7 +511,9 @@ class AzureDictionary:
         else:
             indexed_string = f"(Indexed: False)"
 
-        return indexed_string
+        string_repr = f"[Azure dictionary {indexed_string}]"
+
+        return string_repr
 
     def __repr__(self):
         return str(self)
