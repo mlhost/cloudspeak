@@ -2,8 +2,8 @@ from azure.core import MatchConditions
 from azure.core.exceptions import ResourceExistsError
 from azure.storage.blob import PartialBatchErrorException
 
-from cloudspeak.api.azure.file import AzureFile
-from cloudspeak.api.interface.container import Container
+from cloudspeak.storage.azure.file import AzureFile
+from cloudspeak.storage.interface.container import Container
 from cloudspeak.config import get_config
 from cloudspeak.utils.time import now
 

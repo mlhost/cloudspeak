@@ -1,7 +1,7 @@
 from azure.core.exceptions import ResourceModifiedError, ResourceNotFoundError, HttpResponseError
 from azure.storage.blob import PartialBatchErrorException
 
-from cloudspeak.api.azure import AzureService
+from cloudspeak.storage.azure import AzureService
 from cloudspeak.serializers import JoblibSerializer
 from cloudspeak.utils.basics import removeprefix
 
@@ -11,7 +11,7 @@ class AzureDictionary:
 
     @classmethod
     def from_connection_string(cls, connection_string, container_name, folder_name, indexed=True,
-                               serializer=JoblibSerializer(), create_container=True):
+                               serializer=JoblibSerializer(), create_container=True, context=None):
         """
         Creates an instance of a Remote Dictionary based on Azure Blob Storage backend.
 
@@ -41,6 +41,8 @@ class AzureDictionary:
         :param create_container:
             Creates the container in case it doesn't exit. NOTE: Adds delay since it must query backend.
 
+        :param context:
+            Context name for leases.
         """
         service = AzureService(connection_string=connection_string, serializer=serializer)
         container = service[container_name]
@@ -48,14 +50,15 @@ class AzureDictionary:
         if create_container:
             container.create()
 
-        return cls(container, folder_name, indexed=indexed)
+        return cls(container, folder_name, indexed=indexed, context=context)
 
-    def __init__(self, container, folder_name, indexed=True):
+    def __init__(self, container, folder_name, indexed=True, context=None):
         if not folder_name.endswith("/"):
             folder_name += "/"
 
         self._container = container
         self._folder_name = folder_name
+        self._context = context
         self._index_file = container[self.get_url(self.INDEX_NAME)] if indexed else None
 
     def get_url(self, item_name):
@@ -66,7 +69,7 @@ class AzureDictionary:
 
     @property
     def context(self):
-        return id(self)
+        return id(self) if self._context is None else self._context
 
     @property
     def indexed(self):
@@ -123,7 +126,7 @@ class AzureDictionary:
             index_file.upload(overwrite=True,
                               allow_changed=False)
 
-        except ResourceModifiedError as e:
+        except ResourceModifiedError:
             # If the content has changed we need to merge changes.
             index_file.download()
             idx_latest_content = index_file.data
@@ -168,6 +171,9 @@ class AzureDictionary:
 
         If a key is already locked in a different context, the process will be blocked until the wait_seconds is met
         or until the key is unlocked again.
+
+        :param key:
+            Name of the key to lock in the dictionary.
 
         :param duration_seconds:
             Number of seconds to lock the key.
@@ -234,13 +240,17 @@ class AzureDictionary:
         """
         return self.container.service
 
-    def __getitem__(self, item):
-        is_list = isinstance(item, list)
+    def __getitem__(self, key):
+        progresses = self.async_get(key)
+
+        is_list = isinstance(key, list)
+
+        # Special case: folders as dictionaries
+        if not is_list and type(progresses) is AzureDictionary:
+            return progresses
 
         if not is_list:
-            item = [item]
-
-        progresses = self.async_get(item)
+            progresses = [progresses]
 
         key_name = None
         try:
@@ -256,7 +266,7 @@ class AzureDictionary:
 
         return result
 
-    def async_get(self, item):
+    def async_get(self, key):
         """
         Gets a key -> value from the dictionary in an asynchronous operation.
         It can be retrieved many keys and values at once if lists are specified.
@@ -269,16 +279,31 @@ class AzureDictionary:
             tracking the download operations (speeds, times, sizes, ...).
         """
         container = self._container
-        is_list = isinstance(item, list)
+        is_list = isinstance(key, list)
+
+        if not is_list and key.endswith("/") and not self.indexed:
+            # We return a new dictionary instance:
+            return AzureDictionary(container=self._container,
+                                   folder_name=self.get_url(key),
+                                   indexed=False,
+                                   context=self.context)
 
         if not is_list:
-            item = [item]
+            key = [key]
 
         # We add the folder prefix to each
-        item = [self.get_url(i) for i in item]
+        key = [self.get_url(i) for i in key]
 
-        files = [container[f] for f in item]
+        if self.indexed:
+            files = [container[f] for f in key]
+        else:
+            files = [container[f] for f in key if not f.endswith("/")]
+
         progresses = [f.download() for f in files]
+
+        if len(files) < len(key):
+            raise KeyError("Some of the keys are ending in backslash '/'. Accessing folders in bulk are not supported. "
+                           "Please, access one folder at a time since they are converted into an AzureDictionary.")
 
         result = progresses if is_list else progresses[0]
 
@@ -389,7 +414,7 @@ class AzureDictionary:
             folder_name = self._folder_name
 
             # We iterate over the blobs
-            for f in self._container.get_files(folder_name, delimiter="/"):
+            for f in self._container.get_files(folder_name, delimiter="~"):
                 name = removeprefix(f.name, folder_name)
 
                 # Index name is excluded
@@ -469,8 +494,8 @@ class AzureDictionary:
 
         files = [container[self.get_url(k)] for k in key]
 
-        keys_not_removed = None
-        keys_not_removed_reasons = None
+        keys_not_removed = []
+        keys_not_removed_reasons = []
 
         exception = None
 
@@ -481,8 +506,13 @@ class AzureDictionary:
         except PartialBatchErrorException as e:
             files_not_removed, files_reasons = zip(*e.parts)
 
-            keys_not_removed = [removeprefix(x.name, folder_name) for x in files_not_removed]
-            keys_not_removed_reasons = [f.reason for f in files_reasons]
+            for f, r in zip(files_not_removed, files_reasons):
+                if r.status_code == 404:
+                    # Could not remove because they ARE already removed
+                    continue
+
+                keys_not_removed.append(removeprefix(f.name, folder_name))
+                keys_not_removed_reasons.append(r)
 
             keys_removed = set(key).difference(keys_not_removed)
             exception = e
@@ -492,7 +522,7 @@ class AzureDictionary:
             index_content = [k for k in index_content if k not in keys_removed]
             self.index = index_content
 
-        if exception is not None:
+        if len(keys_not_removed) > 0 and exception is not None:
             if is_list:
                 error = KeyError(f"Only {len(keys_removed)} out of {len(key)} could be removed. "
                                  f"Access the .keys attribute of this exception to know which keys could not be removed and "
