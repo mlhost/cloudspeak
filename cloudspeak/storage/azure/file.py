@@ -385,7 +385,7 @@ class AzureFile(File):
         return lock_id
 
     def lock(self, duration_seconds=-1, wait_seconds=-1, poll_interval_seconds=0.5, changed_ok=False,
-             context=None):
+             context=None, autocreate=False):
         """
         Locks the file in the backend for the specified amount of time.
 
@@ -414,6 +414,10 @@ class AzureFile(File):
                 - custom      -> Lock at a custom level. This can be any string.
 
             If not set, will be used the original File context (inherited from the container).
+
+        :param autocreate:
+            True to create the resource automatically if it doesnt exist.
+            False to raise a ResourceExistsError. By default is False.
 
         :return:
             True if locked by this process. False otherwise.
@@ -445,9 +449,12 @@ class AzureFile(File):
                 # TODO: Exponential wait perhaps?
                 time.sleep(poll_interval_seconds)
 
-            except ResourceNotFoundError:
+            except ResourceNotFoundError as e:
                 # Resource not found? we must create it and retry again.
-                self.create()
+                if autocreate:
+                    self.create()
+                else:
+                    raise e
 
         if lease is None:
             raise TimeoutError("Could not retrieve a lock in time")

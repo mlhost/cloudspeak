@@ -163,7 +163,7 @@ class AzureDictionary:
         finally:
             index_file.unlock(context=self.context)
 
-    def lock(self, key, duration_seconds=30, wait_seconds=-1, poll_interval_seconds=0.5):
+    def lock(self, key, duration_seconds=30, wait_seconds=-1, poll_interval_seconds=0.5, autocreate=False):
         """
         Locks the given key for the specified seconds in a given context.
 
@@ -184,6 +184,11 @@ class AzureDictionary:
         :param poll_interval_seconds:
             Query interval for the key lock release status.
 
+        :param autocreate:
+            True to create the resource automatically if it doesnt exist.
+            False to raise a KeyError in case it doesnt exist.
+            By default is False.
+
         :returns:
             True if locked successfully. False otherwise.
         """
@@ -191,11 +196,18 @@ class AzureDictionary:
         item = self.get_url(key)
         container = self.container
 
-        return container[item].lock(duration_seconds=duration_seconds,
-                                    wait_seconds=wait_seconds,
-                                    poll_interval_seconds=poll_interval_seconds,
-                                    context=context,
-                                    changed_ok=True)
+        try:
+            result = container[item].lock(duration_seconds=duration_seconds,
+                                          wait_seconds=wait_seconds,
+                                          poll_interval_seconds=poll_interval_seconds,
+                                          context=context,
+                                          changed_ok=True,
+                                          autocreate=autocreate)
+
+        except ResourceNotFoundError as e:
+            raise KeyError(f"Key `{removeprefix(item, self._folder_name)}` not found.") from None
+
+        return result
 
     def unlock(self, key):
         """
