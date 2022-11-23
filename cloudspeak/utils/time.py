@@ -3,7 +3,7 @@ import pandas as pd
 
 
 def now():
-    return pd.to_datetime("now").tz_localize("utc")
+    return pd.to_datetime("now", utc=True)
 
 
 def to_datetime(dt, to_current_timezone=True):
