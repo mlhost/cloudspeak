@@ -451,7 +451,7 @@ class AzureDictionary:
             yield k, v
 
     def __contains__(self, item):
-        return self._container[item].exists
+        return self._container[self.get_url(item)].exists
 
     def setdefault(self, key, default=None):
         """

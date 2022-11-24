@@ -1,4 +1,4 @@
-<img style="display: block; margin: auto; width:400px; height:250px;" src="https://raw.githubusercontent.com/mlhost/cloudspeak/v0.0.1/docs/images/logo.png">
+<img style="display: block; margin: auto; width:400px; height:250px;" src="https://raw.githubusercontent.com/mlhost/cloudspeak/v0.0.4/docs/images/logo.png">
 
 [![PyPI version](https://badge.fury.io/py/cloudspeak.svg)](https://badge.fury.io/py/cloudspeak)
 
@@ -9,9 +9,22 @@
 It provides a set of tools that enhances communication and provides abstraction to developers so that they do 
 not require to study the backend API -- this package does that for them. 
 
+# Installation
+
+It can be installed with `PIP`:
+```bash
+pip install cloudspeak
+```
+
+or directly from github:
+```bash
+pip install https://github.com/mlhost/cloudspeak
+```
+
+
 # Docs
 
-* [Getting started](https://cloudspeak.readthedocs.io/en/v0.0.1/).
+* [Getting started](https://cloudspeak.readthedocs.io/en/v0.0.4/).
  
 
 # Examples
@@ -19,7 +32,7 @@ not require to study the backend API -- this package does that for them.
 * Accessing Azure Blob Storage service:
 
 ```python
-from cloudspeak.api.azure import AzureService
+from cloudspeak.storage.azure import AzureService
 
 service = AzureService(connection_string="...")
 container = service['container']
@@ -35,4 +48,4 @@ file.upload(overwrite=True)
 ```
 
 * Transferring with progress:
-<img style="display: block; margin: auto;" src="https://raw.githubusercontent.com/mlhost/cloudspeak/v0.0.1/docs/images/jupyter_download.gif">
+<img style="display: block; margin: auto;" src="https://raw.githubusercontent.com/mlhost/cloudspeak/v0.0.4/docs/images/jupyter_download.gif">

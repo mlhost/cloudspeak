@@ -20,7 +20,7 @@ So far, cloudspeak have languages for the following services:
 The tools provided allow communicating with the backend in a friendly manner. Example:
 
 ```python
-from cloudspeak.api.azure import AzureService
+from cloudspeak.storage.azure import AzureService
 
 service = AzureService(connection_string="...")
 container = service['container']
