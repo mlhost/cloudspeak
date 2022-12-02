@@ -25,7 +25,8 @@ setup(
         "tqdm==4.64.1",
         "joblib==1.2.0",
         "azure-storage-blob==12.14.1",
-        "pandas",
+        "pandas==1.5.2",
+        "lz4==4.0.0"
     ],
     classifiers=[],
     test_suite='nose.collector',
