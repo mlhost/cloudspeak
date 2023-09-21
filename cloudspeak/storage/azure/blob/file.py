@@ -5,9 +5,9 @@ from threading import Lock
 from azure.core import MatchConditions
 from azure.core.exceptions import ResourceExistsError, ResourceModifiedError, ResourceNotFoundError
 
-from cloudspeak.storage.azure.progress import ProgressSingle
-from cloudspeak.storage.azure.snapshots import Snapshots
-from cloudspeak.storage.interface.file import File
+from cloudspeak.storage.azure.blob.progress import ProgressSingle
+from cloudspeak.storage.azure.blob.snapshots import Snapshots
+from cloudspeak.storage.interface.blob.file import File
 from cloudspeak.config import get_config
 from cloudspeak.utils.format import size_to_human
 from cloudspeak.utils.basics import len_nan

@@ -9,49 +9,6 @@ from cloudspeak.utils.basics import removeprefix
 class AzureDictionary:
     INDEX_NAME = "__--REMOTE_DICT--INDEX--__"
 
-    @classmethod
-    def from_connection_string(cls, connection_string, container_name, folder_name, indexed=True,
-                               serializer=JoblibSerializer(), create_container=True, context=None):
-        """
-        Creates an instance of a Remote Dictionary based on Azure Blob Storage backend.
-
-        :param connection_string:
-            Azure Blob Storage connection string.
-
-        :param container_name:
-            Name of the container to use as storage.
-            If the container doesn't exist, it will be created.
-
-        :param folder_name:
-            Name of the folder to use as storage.
-
-        :param indexed:
-            True to store an index along with the storage.
-            The index allows to retrieve how many elements are stored faster than not having indexes, but each write or
-            delete operation must synchronize the index, which might add delays to the process.
-
-            Disabling the index speed is gained in I/O operations, but knowing the number of elements or iterating over
-            them gets more complexity.
-
-        :param serializer:
-            Serializer to use as backend storage.
-            Allowed serializers can be seen in package `cloudsimple.serializers`.
-            None to store/fetch as raw bytes.
-
-        :param create_container:
-            Creates the container in case it doesn't exit. NOTE: Adds delay since it must query backend.
-
-        :param context:
-            Context name for leases.
-        """
-        service = AzureService(connection_string=connection_string, serializer=serializer)
-        container = service[container_name]
-
-        if create_container:
-            container.create()
-
-        return cls(container, folder_name, indexed=indexed, context=context)
-
     def __init__(self, container, folder_name, indexed=True, context=None):
         if not folder_name.endswith("/"):
             folder_name += "/"
