@@ -1,6 +1,7 @@
 <img style="display: block; margin: auto; width:400px; height:250px;" src="https://raw.githubusercontent.com/mlhost/cloudspeak/v0.0.4/docs/images/logo.png">
 
 [![PyPI version](https://badge.fury.io/py/cloudspeak.svg)](https://badge.fury.io/py/cloudspeak)
+[![Documentation Status](https://readthedocs.org/projects/cloudspeak/badge/?version=latest)](https://cloudspeak.readthedocs.io/en/latest/?badge=latest)
 
 
 # CloudSpeak - Azure Backend Abstractions for Python
