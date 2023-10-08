@@ -1,10 +1,17 @@
 site_name: CloudSpeak
 theme: material
+highlight: python
 plugins:
     - search
     - macros
 repo_url: https://github.com/mlhost/cloudspeak
 extra:
-    version: 0.0.5
+    version: 0.1.0
     project_name: cloudspeak
     project_name_lowercase: cloudspeak
+nav:
+    - Getting started: index.md
+    - Introduction: introduction.md
+    - Low level storage: low_level_storage.md
+    - Dictionaries: dictionaries.md
+    - Queues: queues.md

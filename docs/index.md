@@ -1,7 +1,5 @@
 <img style="display: block; margin: auto; width:400px; height:250px;" src="images/logo.png">
 
-# GETTING STARTED
-
 {{project_name}} {{version}} is a set of python tools that eases integration of cloud services in Python projects. 
 
 It provides a set of tools that enhances communication and provides abstraction to developers so that they do 
@@ -9,10 +7,10 @@ not require to study the backend API -- we do that for them.
 
 So far, cloudspeak have languages for the following services:
 
-| Cloud provider | Services supported | Tools provided                     | Abstractions      |
-|----------------|--------------------|------------------------------------|-------------------|
-| Azure          | Azure Blob Storage | Service, Containers, Files (blobs) | Remote dictionary |
-| ...            | ...                | ...                                | ...               |
+| Cloud provider | Services supported | Tools provided                                | Abstractions                    |
+|----------------|--------------------|-----------------------------------------------|---------------------------------|
+| Azure          | Azure Blob Storage | Service, Containers, Files (blobs) and Queues | Remote dictionary, Remote Queue |
+| ...            | ...                | ...                                           | ...                             |
 
 
 # TOOLS
@@ -20,13 +18,20 @@ So far, cloudspeak have languages for the following services:
 The tools provided allow communicating with the backend in a friendly manner. Example:
 
 ```python
-from cloudspeak.storage.azure import AzureService
 
-service = AzureService(connection_string="...")
-container = service['container']
+from cloudspeak.azure import AzureCredentials, AzureFactory 
+
+credentials = AzureCredentials()
+credentials.connection_string_storage = "MY_CONNECTION_STRING"
+
+factory = AzureFactory(credentials)
+
+service = factory.service_storage
+
+container = service.containers['container']
 file = container['path/to/blob']
 
-file.download()
+file.download().join()
 content = file.data
 ```
 
@@ -37,8 +42,7 @@ Even Jupyter notebooks are supported:
 
 <img style="display: block; margin: auto;" src="images/jupyter_all.gif">
 
-
-Simple, yet powerful. Follow the [documentation](tools.md) to know more.
+Simple, yet powerful. Follow the [documentation](introduction.md) to know more.
 
 # ABSTRACTIONS
 
@@ -48,5 +52,7 @@ how to manage concurrency, asynchronous operations, or how to track progresses. 
 
 
 * **Remote Dictionary**. A common dictionary whose keys and values are stored in the cloud. Knowing the connection details to 
-the backend, two processes can begin to exchange data between them by just writing or reading from the dictionary. [documentation](dictionary.md)
+the backend, two processes can begin to exchange data between them by just writing or reading from the dictionary. Follow [Dictionaries](dictionaries.md) to know more.
 
+
+* **Remote queues**. A common queue whose behaviour is completely handled by Azure Storage Queues. Follow [Queues](queues.md) to know more.
