@@ -21,10 +21,13 @@ class AzureDictionary:
         self._index_file = container[self.get_url(self.INDEX_NAME)] if indexed else None
 
     @classmethod
-    def from_connection_string(cls, connection_string, container_name, folder_name, indexed=True, context=None):
+    def from_connection_string(cls, connection_string, container_name, folder_name, create_container=True, indexed=True, context=None):
         warnings.warn("Deprecated construction of dictionary. Use cloudspeak.azure.AzureFactory().dictionary() to instantiate a dictionary instead. Newer versions won't allow using this classmethod.", DeprecationWarning)
         service = AzureService(connection_string=connection_string, serializer=JoblibSerializer(), context=context)
         container = service.containers[container_name]
+        if create_container:
+            container.create(exists_ok=True)
+
         return cls(container, folder_name, indexed=indexed, context=context)
 
     def get_url(self, item_name):
