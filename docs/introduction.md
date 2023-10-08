@@ -54,11 +54,10 @@ With Python, CloudSpeak, and the Azure Storage connection string in place, you a
 
 This documentation is organized into several sections to help you get the most out of CloudSpeak:
 
-1. [Getting Started](link-to-getting-started): A guide to quickly start using CloudSpeak.
-2. [Tutorials](link-to-tutorials): Step-by-step tutorials on using CloudSpeak for common tasks.
-3. [API Reference](link-to-api-reference): Detailed information about the CloudSpeak API.
-4. [Examples](link-to-examples): Code examples showcasing various use cases.
+1. [Getting Started](index.md): A guide to quickly start using CloudSpeak.
+2. [Dictionaries](dictionaries.md): A guide to use remote dictionaries with CloudSpeak.
+3. [Queues](queues.md): A guide to use queues with CloudSpeak.
 
 Feel free to explore the documentation to make the most of CloudSpeak's capabilities and simplify your cloud-based projects.
 
-If you have any questions or encounter issues while using CloudSpeak, please refer to the [Support](link-to-support) section for assistance.
+If you have any questions or encounter issues while using CloudSpeak, please consider opening an issue.
