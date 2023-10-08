@@ -15,7 +15,7 @@ plugins:
     - macros
 repo_url: https://github.com/mlhost/cloudspeak
 extra:
-    version: 0.1.0
+    version: 0.1.1
     project_name: cloudspeak
     project_name_lowercase: cloudspeak
 nav:

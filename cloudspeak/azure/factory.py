@@ -80,12 +80,12 @@ class AzureFactory:
         self._context = context
         self._operations_pool = operations_pool
 
-    def dictionary(self, container, folder_name, indexed=True, create_container=True, context=None) -> AzureDictionary:
+    def dictionary(self, container_name, folder_name, indexed=True, create_container=True, context=None) -> AzureDictionary:
         """
         Generates a remote dictionary based on the specified Azure Blob Storage container and folder.
 
         Args:
-            container (str or ContainerClient): The name of the Azure Blob Storage container or a Container instance retrieved from the ServiceStorage.
+            container_name (str or ContainerClient): The name of the Azure Blob Storage container or a Container instance retrieved from the ServiceStorage.
             folder_name (str): The name of the folder within the container where data will be stored.
             indexed (bool, optional): If True, an index is automatically maintained for faster access times (default).
                 If False, indexing is disabled (faster writes/reads but no list of keys).
@@ -102,13 +102,13 @@ class AzureFactory:
 
         service_storage = self.service_storage
 
-        if type(container) is str:
-            container = service_storage.containers[container]
+        if type(container_name) is str:
+            container_name = service_storage.containers[container_name]
 
         if create_container:
-            container.create(exists_ok=True)
+            container_name.create(exists_ok=True)
 
-        return AzureDictionary(container=container, folder_name=folder_name, indexed=indexed, context=context)
+        return AzureDictionary(container=container_name, folder_name=folder_name, indexed=indexed, context=context)
 
     def queue(self, queue_name, create=True) -> AzureQueue:
         """
